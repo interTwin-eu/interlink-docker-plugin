@@ -36,5 +36,6 @@ jobs:
             ghcr.io/${{ steps.get_repo_owner.outputs.repo_owner }}/interlink-docker-plugin/docker-plugin:${{ env.RELEASE_VERSION }}
             ghcr.io/${{ steps.get_repo_owner.outputs.repo_owner }}/interlink-docker-plugin/docker-plugin:latest
           file: ./docker/Dockerfile.sidecar-docker
-          platforms: linux/amd64, linux/arm64
+          platforms: linux/amd64
+          #platforms: linux/amd64, linux/arm64
 

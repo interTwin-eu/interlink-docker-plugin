@@ -13,7 +13,7 @@ builds:
       - linux
       - darwin
     goarch:
-      - arm64
+      #- arm64
       - amd64
     main: ./
 archives:
