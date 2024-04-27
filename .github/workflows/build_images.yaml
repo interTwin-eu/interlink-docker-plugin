@@ -30,11 +30,11 @@ jobs:
       - name: Build container base image
         uses: docker/build-push-action@v5
         with:
-          context: ./Dockerfile.sidecar-docker
+          context: ./
           outputs: "type=registry,push=true"
           tags: |
             ghcr.io/${{ steps.get_repo_owner.outputs.repo_owner }}/interlink-docker-plugin/docker-plugin:${{ env.RELEASE_VERSION }}
             ghcr.io/${{ steps.get_repo_owner.outputs.repo_owner }}/interlink-docker-plugin/docker-plugin:latest
-          file: ./Dockerfile
+          file: ./docker/Dockerfile.sidecar-docker
           platforms: linux/amd64, linux/arm64
 
