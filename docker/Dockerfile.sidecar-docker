@@ -2,7 +2,7 @@ FROM golang:1.21 as build-stage
 
 WORKDIR /app
 COPY .. .
-RUN CGO_ENABLED=1 GOOS=linux go build -o bin/docker-sidecar cmd/main.go
+RUN CGO_ENABLED=1 GOOS=linux go build -o bin/docker-sidecar main.go
 
 FROM bash:latest as bash-stage
 
