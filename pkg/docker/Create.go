@@ -19,26 +19,15 @@ import (
 	"github.com/intertwin-eu/interlink-docker-plugin/pkg/docker/dindmanager"
 
 	"path/filepath"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	trace "go.opentelemetry.io/otel/trace"
 )
-
-func (h *SidecarHandler) CheckGpuRequestFromContainer(containerData v1.Container) error {
-
-	numGpusRequested := 0
-	if val, ok := containerData.Resources.Limits["nvidia.com/gpu"]; ok {
-		numGpusRequested = int(val.Value())
-	}
-
-	if numGpusRequested > 0 {
-		return errors.New("GPU requests are not supported")
-	}
-
-	return nil
-}
 
 func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w http.ResponseWriter) ([]DockerRunStruct, error) {
 
 	var dockerRunStructs []DockerRunStruct
-	var gpuArgs string = ""
 
 	podUID := string(podData.Pod.UID)
 	podNamespace := string(podData.Pod.Namespace)
@@ -91,12 +80,6 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 		for _, container := range containers {
 
 			containerName := podNamespace + "-" + podUID + "-" + container.Name
-
-			// check if the container has GPU requests
-			err := h.CheckGpuRequestFromContainer(container)
-			if err != nil {
-				return dockerRunStructs, errors.New("GPU requests are not supported")
-			}
 
 			var envVars string = ""
 			for _, envVar := range container.Env {
@@ -206,7 +189,6 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 				Name:            containerName,
 				Command:         "docker " + strings.Join(shell.Args, " "),
 				IsInitContainer: isInitContainer,
-				GpuArgs:         gpuArgs,
 			})
 		}
 	}
@@ -217,6 +199,12 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.G(h.Ctx).Info("\u23F3 [CREATE CALL] Received create call from InterLink ")
+
+	start := time.Now().UnixMicro()
+	tracer := otel.Tracer("interlink-API")
+	_, span := tracer.Start(h.Ctx, "Create", trace.WithAttributes(
+		attribute.Int64("start.timestamp", start),
+	))
 
 	// create bool variable to set if a new dind container has to be created
 	newDindContainerCreated := false
@@ -311,98 +299,6 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// // check if between the containers there is a container that requires a GPU
-		// for _, container := range containers {
-		// 	if container.GpuArgs != "" {
-		// 		gpuArgs = container.GpuArgs
-		// 	}
-		// }
-
-		// gpuArgsAsArray := []string{}
-		// if gpuArgs != "" {
-		// 	gpuArgsAsArray = strings.Split(gpuArgs, " ")
-		// }
-
-		// dindImage := "ghcr.io/extrality/nvidia-dind"
-		// if gpuArgs == "" {
-		// 	dindImage = "docker:dind"
-		// }
-
-		// // create a dedicated docker network for the dind container
-		// shell := exec.ExecTask{
-		// 	Command: "docker",
-		// 	Args:    []string{"network", "create", "--driver", "bridge", string(data.Pod.UID) + "_dind_network"},
-		// 	Shell:   true,
-		// }
-		// execReturnNetworkCommand, err := shell.Execute()
-		// if err != nil {
-		// 	HandleErrorAndRemoveData(h, w, "An error occurred during the creation of the network for the DIND container", err, "", "")
-		// 	return
-		// }
-
-		// // log the docker network creation command
-		// log.G(h.Ctx).Info("\u2705 [POD FLOW] Docker network created successfully with command: " + "docker " + strings.Join(shell.Args, " "))
-
-		// dindContainerArgs := []string{"run"}
-		// dindContainerArgs = append(dindContainerArgs, gpuArgsAsArray...)
-		// if _, err := os.Stat("/cvmfs"); err == nil {
-		// 	dindContainerArgs = append(dindContainerArgs, "-v", "/cvmfs:/cvmfs")
-		// }
-
-		// // add the network to the dind container
-		// dindContainerArgs = append(dindContainerArgs, "--network", string(data.Pod.UID)+"_dind_network")
-		// dindContainerArgs = append(dindContainerArgs, "--privileged", "-v", wd+":/"+wd, "-v", "/home:/home", "-v", "/var/lib/docker/overlay2:/var/lib/docker/overlay2", "-v", "/var/lib/docker/image:/var/lib/docker/image", "-d", "--name", string(data.Pod.UID)+"_dind", dindImage)
-
-		// var dindContainerID string
-		// shell = exec.ExecTask{
-		// 	Command: "docker",
-		// 	Args:    dindContainerArgs,
-		// 	Shell:   true,
-		// }
-
-		// execReturn, err = shell.Execute()
-		// if err != nil {
-		// 	HandleErrorAndRemoveData(h, w, "An error occurred during the execution of DIND container command", err, "", "")
-		// 	return
-		// }
-		// dindContainerID = execReturn.Stdout
-
-		// // log also the command executed to create the DIND container
-		// log.G(h.Ctx).Info("\u2705 [POD FLOW] DIND container command executed successfully: " + "docker " + strings.Join(shell.Args, " "))
-
-		// log.G(h.Ctx).Info("\u2705 [POD FLOW] DIND container created successfully with ID: " + dindContainerID)
-
-		// // create a variable of maximum number of retries
-		// maxRetries := 20
-		// output := []byte{}
-
-		// // wait until the dind container is up and running by check that the command docker ps inside of it does not return an error
-		// for {
-
-		// 	if maxRetries == 0 {
-		// 		HandleErrorAndRemoveData(h, w, "The number of attempts to check if the DIND container is running is 0. This means that an error occurred during the creation of the DIND container UID. "+dindContainerID+" output: "+string(output)+" Network creation output "+string(execReturnNetworkCommand.Stdout), err, "", "")
-		// 		return
-		// 	}
-
-		// 	cmd := OSexec.Command("docker", "logs", string(data.Pod.UID)+"_dind")
-		// 	output, err = cmd.CombinedOutput()
-
-		// 	if err != nil {
-		// 		time.Sleep(1 * time.Second)
-		// 	}
-
-		// 	if strings.Contains(string(output), "API listen on /var/run/docker.sock") {
-		// 		break
-		// 	} else {
-		// 		time.Sleep(1 * time.Second)
-		// 	}
-
-		// 	maxRetries -= 1
-
-		// }
-
-		// log.G(h.Ctx).Info("\u2705 [POD FLOW] DIND container is up and running, ready to create the containers inside of it")
-
 		// set the podUID to the dind container
 		err = h.DindManager.SetPodUIDToDind(dindContainerID, podUID)
 		if err != nil {
@@ -423,94 +319,6 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if len(initContainers) > 0 {
-
-			log.G(h.Ctx).Info("\u2705 [POD FLOW] Start creating init containers")
-
-			initContainersCommand := "#!/bin/sh\n"
-			for _, initContainer := range initContainers {
-				initContainersCommand += initContainer.Command + "\n"
-			}
-			err = os.WriteFile(podDirectoryPath+"/init_containers_command.sh", []byte(initContainersCommand), 0644)
-			if err != nil {
-				HandleErrorAndRemoveData(h, w, "An error occurred during the creation of the init container script file", err, "", "")
-				return
-			}
-
-			shell := exec.ExecTask{
-				Command: "docker",
-				Args:    []string{"exec", string(data.Pod.UID) + "_dind", "/bin/sh", podDirectoryPath + "/init_containers_command.sh"},
-			}
-
-			_, err := shell.Execute()
-			if err != nil {
-				HandleErrorAndRemoveData(h, w, "An error occurred during the exec of the init container command script ", err, "", "")
-				return
-			}
-			// Poll the container status until it exits
-			for {
-
-				allInitContainersCompleted := false
-				initContainersCompleted := 0
-
-				for _, initContainer := range initContainers {
-
-					shell = exec.ExecTask{
-						Command: "docker",
-						Args:    []string{"exec", string(data.Pod.UID) + "_dind", "docker", "inspect", "--format='{{.State.Status}}'", initContainer.Name},
-					}
-
-					statusReturn, err := shell.Execute()
-					if err != nil {
-						HandleErrorAndRemoveData(h, w, "An error occurred during inspect of init container", err, "", "")
-						return
-					}
-
-					status := strings.Trim(statusReturn.Stdout, "'\n")
-					if status == "exited" {
-						initContainersCompleted += 1
-					} else {
-						time.Sleep(1 * time.Second) // Wait for a second before polling again
-					}
-				}
-				if initContainersCompleted == len(initContainers) {
-					allInitContainersCompleted = true
-				}
-
-				if allInitContainersCompleted {
-					break
-				}
-			}
-
-			log.G(h.Ctx).Info("\u2705 [POD FLOW] Init containers created and executed successfully")
-		}
-
-		// create a file called containers_command.sh and write the containers commands to it, use WriteFile function
-		containersCommand := "#!/bin/sh\n"
-		for _, container := range containers {
-			containersCommand += container.Command + "\n"
-		}
-		err = os.WriteFile(podDirectoryPath+"/containers_command.sh", []byte(containersCommand), 0644)
-		if err != nil {
-			HandleErrorAndRemoveData(h, w, "An error occurred during the creation of the container commands script.", err, "", "")
-			return
-		}
-
-		log.G(h.Ctx).Info("\u2705 [POD FLOW] Containers commands written to the script file")
-
-		shell = exec.ExecTask{
-			Command: "docker",
-			Args:    []string{"exec", string(data.Pod.UID) + "_dind", "/bin/sh", podDirectoryPath + "/containers_command.sh"},
-		}
-
-		_, err = shell.Execute()
-		if err != nil {
-			HandleErrorAndRemoveData(h, w, "An error occurred during the execution of the container command script", err, "", "")
-			return
-		}
-
-		log.G(h.Ctx).Info("\u2705 [POD FLOW] Containers created successfully")
-
 		createResponse := CreateStruct{PodUID: string(data.Pod.UID), PodJID: dindContainerID}
 		createResponseBytes, err := json.Marshal(createResponse)
 		if err != nil {
@@ -519,6 +327,11 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		span.SetAttributes(attribute.String("podUID", string(data.Pod.UID)))
+		span.SetAttributes(attribute.String("podJID", dindContainerID))
+		span.SetAttributes(attribute.String("podNamespace", string(data.Pod.Namespace)))
+		span.SetAttributes(attribute.String("podName", string(data.Pod.Name)))
+
 		w.WriteHeader(statusCode)
 
 		if statusCode != http.StatusOK {
@@ -526,6 +339,99 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.Write(createResponseBytes)
 		}
+
+		if err != nil {
+			span.SetAttributes(attribute.String("error", err.Error()))
+		}
+		commonIL.SetDurationSpan(start, span, commonIL.WithHTTPReturnCode(statusCode))
+		span.End()
+
+		go func() {
+
+			if len(initContainers) > 0 {
+
+				log.G(h.Ctx).Info("\u2705 [POD FLOW] Start creating init containers")
+
+				// Create a list to hold the docker run commands
+				var initContainerCommands []string
+
+				// Build the docker run commands for each init container
+				for _, initContainer := range initContainers {
+					initContainerCommands = append(initContainerCommands, initContainer.Command+"\n")
+				}
+
+				// Log the init container commands
+				log.G(h.Ctx).Info("\u2705 [POD FLOW] Init containers command list: " + strings.Join(initContainerCommands, ", "))
+
+				// Run init containers sequentially
+				for _, initContainer := range initContainers {
+					log.G(h.Ctx).Info("\u2705 [POD FLOW] Executing init container: " + initContainer.Name)
+
+					// Execute the docker command for the current init container
+					shell := exec.ExecTask{
+						Command: "docker",
+						Args:    []string{"exec", string(data.Pod.UID) + "_dind", "/bin/sh", "-c", initContainer.Command},
+					}
+
+					_, err := shell.Execute()
+					if err != nil {
+						HandleErrorAndRemoveData(h, w, "An error occurred during the exec of the init container command", err, "", "")
+						return
+					}
+
+					// Poll the container status until it exits
+					for {
+						shell = exec.ExecTask{
+							Command: "docker",
+							Args:    []string{"exec", string(data.Pod.UID) + "_dind", "docker", "inspect", "--format='{{.State.Status}}'", initContainer.Name},
+						}
+
+						statusReturn, err := shell.Execute()
+						if err != nil {
+							HandleErrorAndRemoveData(h, w, "An error occurred during inspect of init container", err, "", "")
+							return
+						}
+
+						status := strings.Trim(statusReturn.Stdout, "'\n")
+						if status == "exited" {
+							log.G(h.Ctx).Info("\u2705 [POD FLOW] Init container " + initContainer.Name + " has completed")
+							break
+						} else {
+							time.Sleep(1 * time.Second) // Wait for a second before polling again
+						}
+					}
+				}
+
+				log.G(h.Ctx).Info("\u2705 [POD FLOW] All init containers created and executed successfully")
+			}
+
+			// create a file called containers_command.sh and write the containers commands to it, use WriteFile function
+			containersCommand := "#!/bin/sh\n"
+			for _, container := range containers {
+				containersCommand += container.Command + "\n"
+			}
+			err = os.WriteFile(podDirectoryPath+"/containers_command.sh", []byte(containersCommand), 0644)
+			if err != nil {
+				HandleErrorAndRemoveData(h, w, "An error occurred during the creation of the container commands script.", err, "", "")
+				return
+			}
+
+			log.G(h.Ctx).Info("\u2705 [POD FLOW] Containers commands written to the script file")
+
+			shell = exec.ExecTask{
+				Command: "docker",
+				Args:    []string{"exec", string(data.Pod.UID) + "_dind", "/bin/sh", podDirectoryPath + "/containers_command.sh"},
+			}
+
+			_, err = shell.Execute()
+			if err != nil {
+				HandleErrorAndRemoveData(h, w, "An error occurred during the execution of the container command script", err, "", "")
+				return
+			}
+
+			log.G(h.Ctx).Info("\u2705 [POD FLOW] Containers created successfully")
+		}()
+
 	}
 
 }
@@ -539,7 +445,6 @@ func HandleErrorAndRemoveData(h *SidecarHandler, w http.ResponseWriter, s string
 	if podNamespace != "" && podUID != "" {
 		os.RemoveAll(h.Config.DataRootFolder + podNamespace + "-" + podUID)
 	}
-
 	dindSpec := dindmanager.DindSpecs{}
 	dindSpec, err = h.DindManager.GetDindFromPodUID(podUID)
 

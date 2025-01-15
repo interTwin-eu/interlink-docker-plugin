@@ -48,7 +48,7 @@ To be configured on the repository settings.
 Clone the repository with the following command:
 
 ```bash
-git clone https://github.com/interTwin-eu/interlink-docker-plugin.git && cd interlink-docker-plugin
+git clone https://github.com/interTwin-eu/interlink-docker-plugin.git
 ```
 
 and run the following command to build the docker image:
@@ -63,12 +63,15 @@ docker build . -t  <image_name>:<tag> -f docker/Dockerfile.sidecar-docker
 To build the plugin executable, clone the repository and run the makefile:
 
 ```bash
-git clone https://github.com/interTwin-eu/interlink-docker-plugin.git && cd interlink-docker-plugin && make 
+git clone https://github.com/interTwin-eu/interlink-docker-plugin.git 
+git checkout 2-light-version-no-gpu # if you want to build the plugin without GPU support, otherwise use the main branch
+cd interlink-docker-plugin 
+make 
 ```
 
 ## Docker plugin logic and configuration
 
-An Interlink plugin is the last component of the InterLink chain (check here the InterLink flow ...). 
+An Interlink plugin is the last component of the InterLink chain (https://intertwin-eu.github.io/interLink/docs/intro/). 
 In particular, the docker plugin is responsible for executing the requests coming from the InterLink server, i.e. the requests to create, delete, logs and status of a POD, as docker containers.
 There are two main versions of the plugin that correspond with two different branches of the repository: the main and the 2-light-version-no-gpu.
 The main version of the plugin supports the creation of docker containers with GPU support, while the 2-light-version-no-gpu does not support GPU. In the first case, to build the binary executable, the following command should be used:
@@ -77,7 +80,12 @@ The main version of the plugin supports the creation of docker containers with G
 CGO_ENABLED=1 GOOS=linux go build -o bin/docker-sd cmd/main.go
 ```
 As you can see, the CGO_ENABLED flag is set to 1, which means that the plugin will be built to allow the GO program to use C code. This is necessary to use the Nvidia GPU libraries.
-In the second case, the command is the following:
+In the second case, it is first necessary to change the branch of the repository with the following command:
+
+```bash
+git checkout 2-light-version-no-gpu
+```
+Then, the command to build the binary executable of the plugin without GPU support is the following:
 
 ```bash
 CGO_ENABLED=0 GOOS=linux go build -o bin/docker-sd cmd/main.go
@@ -119,7 +127,21 @@ BashPath: /bin/bash
 VerboseLogging: true
 ErrorsOnlyLogging: false
 ```
-and then run the plugin with the following command:
+
+Then, there two other environment variables that should be set:
+
+```bash
+export GPUENABLED=1
+```
+If you want to enable the GPU support, otherwise set it to 0.
+
+```bash
+export AVAILABLEDINDS=10
+```
+This variable sets the number of DIND containers that the plugin create when it starts.
+This number should be greater than the number of pods that the InterLink VK can create at the same time.
+
+Finally, you can run the plugin with the following command:
 
 ```bash
 ./bin/docker-sd

@@ -10,13 +10,29 @@ import (
 	OSexec "os/exec"
 
 	"github.com/containerd/containerd/log"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	trace "go.opentelemetry.io/otel/trace"
 
 	commonIL "github.com/intertwin-eu/interlink-docker-plugin/pkg/common"
 )
 
+func handleError(span trace.Span, err error, statusCode int, start int64) {
+	span.SetAttributes(attribute.String("error", err.Error()))
+	commonIL.SetDurationSpan(start, span, commonIL.WithHTTPReturnCode(statusCode))
+	span.End()
+}
+
 // GetLogsHandler performs a Docker logs command and returns its manipulated output
 func (h *SidecarHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request) {
 	log.G(h.Ctx).Info("\u23F3 [LOGS CALL]: received get logs call")
+
+	start := time.Now().UnixMicro()
+	tracer := otel.Tracer("interlink-API")
+	_, span := tracer.Start(h.Ctx, "GetLogs", trace.WithAttributes(
+		attribute.Int64("start.timestamp", start),
+	))
+
 	var req commonIL.LogStruct
 	statusCode := http.StatusOK
 	currentTime := time.Now()
@@ -27,6 +43,7 @@ func (h *SidecarHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(statusCode)
 		w.Write([]byte("Some errors occurred while checking container status. Check Docker Sidecar's logs"))
 		log.G(h.Ctx).Error(err)
+		handleError(span, err, statusCode, start)
 		return
 	}
 
@@ -36,6 +53,7 @@ func (h *SidecarHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(statusCode)
 		w.Write([]byte("Some errors occurred while checking container status. Check Docker Sidecar's logs"))
 		log.G(h.Ctx).Error(err)
+		handleError(span, err, statusCode, start)
 		return
 	}
 
@@ -50,6 +68,7 @@ func (h *SidecarHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request) 
 		log.G(h.Ctx).Error(err)
 		statusCode = http.StatusInternalServerError
 		w.WriteHeader(statusCode)
+		handleError(span, err, statusCode, start)
 		return
 	}
 
@@ -80,6 +99,7 @@ func (h *SidecarHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request) 
 		log.G(h.Ctx).Error(err)
 		statusCode = http.StatusInternalServerError
 		w.WriteHeader(statusCode)
+		handleError(span, err, statusCode, start)
 		return
 	}
 
@@ -143,4 +163,10 @@ func (h *SidecarHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(statusCode)
 		w.Write([]byte(returnedLogs))
 	}
+
+	if err != nil {
+		span.SetAttributes(attribute.String("error", err.Error()))
+	}
+	commonIL.SetDurationSpan(start, span, commonIL.WithHTTPReturnCode(statusCode))
+	span.End()
 }

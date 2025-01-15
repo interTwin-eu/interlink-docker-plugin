@@ -6,10 +6,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	exec "github.com/alexellis/go-execute/pkg/v1"
 	"github.com/containerd/containerd/log"
+	commonIL "github.com/intertwin-eu/interlink-docker-plugin/pkg/common"
 	"github.com/intertwin-eu/interlink-docker-plugin/pkg/docker/dindmanager"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	trace "go.opentelemetry.io/otel/trace"
 	v1 "k8s.io/api/core/v1"
 
 	"path/filepath"
@@ -18,6 +23,13 @@ import (
 // DeleteHandler stops and deletes Docker containers from provided data
 func (h *SidecarHandler) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	log.G(h.Ctx).Info("\u23F3 [DELETE CALL] Received delete call from Interlink")
+
+	start := time.Now().UnixMicro()
+	tracer := otel.Tracer("interlink-API")
+	_, span := tracer.Start(h.Ctx, "Delete", trace.WithAttributes(
+		attribute.Int64("start.timestamp", start),
+	))
+
 	var execReturn exec.ExecResult
 	statusCode := http.StatusOK
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -107,4 +119,10 @@ func (h *SidecarHandler) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Write([]byte("All containers for submitted Pods have been deleted"))
 	}
+
+	if err != nil {
+		span.SetAttributes(attribute.String("error", err.Error()))
+	}
+	commonIL.SetDurationSpan(start, span, commonIL.WithHTTPReturnCode(statusCode))
+	span.End()
 }
