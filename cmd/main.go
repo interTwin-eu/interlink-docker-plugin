@@ -229,6 +229,8 @@ func main() {
 		if err != nil {
 			log.G(ctx).Info("\u274C Error during fpga discover: %w", err)
 		}
+
+		SidecarAPIs.FPGAManager = fpgaManager
 	}
 
 	log.G(ctx).Info(fmt.Sprintf("\u2705 Going to start the sidecar on port %s", interLinkConfig.Sidecarport))

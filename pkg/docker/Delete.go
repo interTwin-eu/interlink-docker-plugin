@@ -55,6 +55,11 @@ func (h *SidecarHandler) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	podUID := string(pod.UID)
 	podNamespace := string(pod.Namespace)
 
+	for _, container := range pod.Spec.Containers {
+		containerName := podNamespace + "-" + podUID + "-" + container.Name
+		h.FPGAManager.Release(containerName)
+	}
+
 	log.G(h.Ctx).Debug("\u2705 [DELETE CALL] Deleting POD " + podUID + "_dind")
 
 	cmd := []string{"rm", "-f", podUID + "_dind"}

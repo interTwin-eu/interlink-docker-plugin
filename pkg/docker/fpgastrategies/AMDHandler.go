@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"os/exec"
+	"regexp"
 	"strings"
+
+	exec "github.com/alexellis/go-execute/pkg/v1"
 
 	"sync"
 
@@ -15,13 +17,15 @@ import (
 )
 
 type FPGASpecs struct {
-	BDF         string
-	Shell       string
-	LogicUUID   string
-	ContainerID string
-	DeviceReady string
-	Available   bool
-	Index       int
+	BDF           string
+	Shell         string
+	LogicUUID     string
+	deviceID      string
+	ContainerID   string
+	DeviceReady   string
+	DeviceToMount string
+	Available     bool
+	Index         int
 }
 
 type FPGAManager struct {
@@ -34,14 +38,14 @@ type FPGAManager struct {
 type FPGAManagerInterface interface {
 	Init() error
 	Shutdown() error
-	GetGPUSpecsList() []FPGASpecs
+	GetFPGASpecsList() []FPGASpecs
 	Dump() error
 	Discover() error
 	Check() error
-	GetAvailableGPUs(numGPUs int) ([]FPGASpecs, error)
+	GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error)
 	Assign(UUID string, containerID string) error
 	Release(UUID string) error
-	GetAndAssignAvailableGPUs(numGPUs int, containerID string) ([]FPGASpecs, error)
+	GetAndAssignAvailableFPGAs(numFPGAs int, containerID string) ([]FPGASpecs, error)
 }
 
 func (a *FPGAManager) Init() error {
@@ -56,58 +60,115 @@ func (a *FPGAManager) Init() error {
 		return fmt.Errorf("/tools/Xilinx/Vitis/2023.2 does not exist: %v", err)
 	}
 
-	// Source the setup.sh to initialize Xilinx tools
-	cmd := exec.Command("bash", "-c", "source /opt/xilinx/xrt/setup.sh")
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("Error sourcing setup.sh: %v", err)
+	// Source the setup.sh to initialize Xilinx tools using shell
+	shellArgs := []string{"source", "/opt/xilinx/xrt/setup.sh"}
+	shell := exec.ExecTask{
+		Command: "/bin/bash",
+		Args:    shellArgs,
+		Shell:   true,
 	}
+
+	_, err := shell.Execute()
+	if err != nil {
+		return fmt.Errorf("Error running source setup.sh command: %v", err)
+	}
+
 	return nil
 }
 
 // Discover implements the Discover function of the FPGAManager interface
 func (a *FPGAManager) Discover() error {
 
-	cmd := exec.Command("lspci", "|", "grep", "Xilinx")
-	output, err := cmd.CombinedOutput()
+	shellArgs := []string{"|", "grep", "Xilinx"}
+
+	shell := exec.ExecTask{
+		Command: "/usr/bin/lspci",
+		Args:    shellArgs,
+		Shell:   true,
+	}
+
+	regexPattern := `^\[[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]\].*`
+	re := regexp.MustCompile(regexPattern)
+
+	shell.Execute()
+	output, err := shell.Execute()
 	if err != nil {
 		return fmt.Errorf("Error running lspci command: %v", err)
 	}
 
-	// Extract BDF and other information from lspci output
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(string(output.Stdout), "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "Xilinx") {
-			// Parse the BDF and other necessary information from the lspci line
-			// Example: "01:00.0 Processing accelerators: Xilinx Corporation Device 505c"
 			parts := strings.Fields(line)
 			if len(parts) < 3 {
 				continue
 			}
-
 			bdf := parts[0]
+			shellArgs := []string{"/opt/xilinx/xrt/setup.sh"}
+			shell := exec.ExecTask{
+				Command: "source",
+				Args:    shellArgs,
+				Shell:   true,
+			}
 
-			// Now, source the setup.sh and run `xbutil examine` to gather FPGA information
-			cmd = exec.Command("bash", "-c", "source /opt/xilinx/xrt/setup.sh && xbutil examine")
-			examineOutput, err := cmd.CombinedOutput()
+			_, err := shell.Execute()
+			if err != nil {
+				return fmt.Errorf("Error running source setup.sh command: %v", err)
+			}
+
+			cmd := exec.ExecTask{
+				Command: "/opt/xilinx/xrt/bin/xbutil",
+				Args:    []string{"examine"}, // "--device", bdf
+				Shell:   false,
+			}
+			outputXbutil, err := cmd.Execute()
 			if err != nil {
 				return fmt.Errorf("Error running xbutil examine: %v", err)
 			}
 
-			// Parse the xbutil examine output to extract FPGA details
-			examineLines := strings.Split(string(examineOutput), "\n")
+			examineLines := strings.Split(string(outputXbutil.Stdout), "\n")
 			for _, examineLine := range examineLines {
-				// Find the line with the device details (look for "Devices present")
-				if strings.Contains(examineLine, "Devices present") {
-					// Parse the detailed information from the xbutil examine output
-					// For example: "[0000:01:00.1]  :  xilinx_u55c_gen3x16_xdma_base_3  97088961-FEAE-DA91-52A2-1D9DFD63CCEF  user(inst=129)  Yes"
+
+				if re.MatchString(examineLine) {
 					fpgas := strings.Split(examineLine, "  :  ")
-					if len(fpgas) > 1 {
+					fmt.Printf("FPGAs: %v\n", fpgas)
+					found := false
+
+					deviceID := ""
+					reDeviceID := regexp.MustCompile(`user\(inst=(\d+)\)`)
+					matches := reDeviceID.FindStringSubmatch(fpgas[1])
+					if len(matches) > 1 {
+						deviceID = matches[1]
+					}
+
+					logicUUID := ""
+					reLogicUUID := regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+					matches = reLogicUUID.FindStringSubmatch(fpgas[1])
+					if len(matches) > 0 {
+						logicUUID = matches[0]
+					}
+
+					shell := ""
+					reLogiShell := regexp.MustCompile(`xilinx_.*_base_`)
+					matches = reLogiShell.FindStringSubmatch(fpgas[1])
+					if len(matches) > 0 {
+						shell = matches[0]
+					}
+
+					for _, fpgaSpec := range a.FPGASpecsList {
+						if fpgaSpec.LogicUUID == fpgas[1] {
+							found = true
+							break
+						}
+					}
+					if len(fpgas) > 1 && !found {
 						spec := FPGASpecs{
-							BDF:       bdf,
-							Shell:     fpgas[0],
-							LogicUUID: fpgas[1],
-							Available: true, // Assuming it's available for now, can update based on further output parsing
+							BDF:           bdf,
+							Shell:         shell,
+							LogicUUID:     logicUUID,
+							deviceID:      deviceID,
+							DeviceToMount: "/dev/dri/renderD" + deviceID,
+							Available:     true, // Assuming it's available for now, can update based on further output parsing
 						}
 						a.FPGASpecsList = append(a.FPGASpecsList, spec)
 					}
@@ -119,7 +180,7 @@ func (a *FPGAManager) Discover() error {
 	if len(a.FPGASpecsList) > 0 {
 		log.G(a.Ctx).Info("\u2705 Discovered FPGAs:")
 		for _, fpgaSpec := range a.FPGASpecsList {
-			log.G(a.Ctx).Info(fmt.Sprintf("\u2705 BDF: %s, Shell: %s, LogicUUID: %s, Available: %t", fpgaSpec.BDF, fpgaSpec.Shell, fpgaSpec.LogicUUID, fpgaSpec.Available))
+			log.G(a.Ctx).Info(fmt.Sprintf("\u2705 BDF: %s, Shell: %s, LogicUUID: %s, DeviceID %s,  Available: %t", fpgaSpec.BDF, fpgaSpec.Shell, fpgaSpec.LogicUUID, fpgaSpec.deviceID, fpgaSpec.Available))
 		}
 	} else {
 		log.G(a.Ctx).Info(" \u2705 No FPGAs discovered")
@@ -137,7 +198,7 @@ func (a *FPGAManager) Shutdown() error {
 	return nil
 }
 
-func (a *FPGAManager) GetGPUSpecsList() []FPGASpecs {
+func (a *FPGAManager) GetFPGASpecsList() []FPGASpecs {
 	return a.FPGASpecsList
 }
 
@@ -146,8 +207,8 @@ func (a *FPGAManager) Assign(UUID string, containerID string) error {
 	for i := range a.FPGASpecsList {
 		if a.FPGASpecsList[i].LogicUUID == UUID {
 
-			if a.FPGASpecsList[i].Available == false {
-				return fmt.Errorf("GPU with UUID %s is already in use by container %s", UUID, a.FPGASpecsList[i].ContainerID)
+			if !a.FPGASpecsList[i].Available {
+				return fmt.Errorf("FPGA with UUID %s is already in use by container %s", UUID, a.FPGASpecsList[i].ContainerID)
 			}
 
 			a.FPGASpecsList[i].ContainerID = containerID
@@ -167,7 +228,7 @@ func (a *FPGAManager) Release(containerID string) error {
 	for i := range a.FPGASpecsList {
 		if a.FPGASpecsList[i].ContainerID == containerID {
 
-			if a.FPGASpecsList[i].Available == true {
+			if a.FPGASpecsList[i].Available {
 				continue
 			}
 
@@ -179,26 +240,26 @@ func (a *FPGAManager) Release(containerID string) error {
 	return nil
 }
 
-func (a *FPGAManager) GetAvailableGPUs(numGPUs int) ([]FPGASpecs, error) {
+func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
 
-	var availableGPUs []FPGASpecs
-	for _, gpuSpec := range a.FPGASpecsList {
-		if gpuSpec.Available == true {
-			availableGPUs = append(availableGPUs, gpuSpec)
-			if len(availableGPUs) == numGPUs {
-				return availableGPUs, nil
+	var availableFPGAs []FPGASpecs
+	for _, fpgaSpec := range a.FPGASpecsList {
+		if fpgaSpec.Available {
+			availableFPGAs = append(availableFPGAs, fpgaSpec)
+			if len(availableFPGAs) == numFPGAs {
+				return availableFPGAs, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("Not enough available GPUs. Requested: %d, Available: %d", numGPUs, len(availableGPUs))
+	return nil, fmt.Errorf("Not enough available FPGAs. Requested: %d, Available: %d", numFPGAs, len(availableFPGAs))
 }
 
-func (a *FPGAManager) GetAndAssignAvailableGPUs(numGPUs int, containerID string) ([]FPGASpecs, error) {
+func (a *FPGAManager) GetAndAssignAvailableFPGAs(numFPGAs int, containerID string) ([]FPGASpecs, error) {
 
 	a.FPGASpecsMutex.Lock()
 	defer a.FPGASpecsMutex.Unlock()
 
-	fpgaSpecs, err := a.GetAvailableGPUs(numGPUs)
+	fpgaSpecs, err := a.GetAvailableFPGAs(numFPGAs)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +274,7 @@ func (a *FPGAManager) GetAndAssignAvailableGPUs(numGPUs int, containerID string)
 	return fpgaSpecs, nil
 }
 
-// dump the GPUSpecsList into a JSON file
+// dump the FPGASpecsList into a JSON file
 func (a *FPGAManager) Dump() error {
 
 	// Convert the array to JSON format
@@ -223,7 +284,7 @@ func (a *FPGAManager) Dump() error {
 	}
 
 	// Write JSON data to a file
-	err = ioutil.WriteFile("gpu_specs.json", jsonData, 0644)
+	err = ioutil.WriteFile("fpga_specs.json", jsonData, 0644)
 	if err != nil {
 		return fmt.Errorf("Error writing to file: %v", err)
 	}

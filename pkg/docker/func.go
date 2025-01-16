@@ -13,12 +13,14 @@ import (
 
 	commonIL "github.com/intertwin-eu/interlink-docker-plugin/pkg/common"
 	"github.com/intertwin-eu/interlink-docker-plugin/pkg/docker/dindmanager"
+	"github.com/intertwin-eu/interlink-docker-plugin/pkg/docker/fpgastrategies"
 )
 
 type SidecarHandler struct {
 	Config      commonIL.InterLinkConfig
 	Ctx         context.Context
 	DindManager dindmanager.DindManagerInterface
+	FPGAManager fpgastrategies.FPGAManagerInterface
 }
 
 func parseContainerCommandAndReturnArgs(Ctx context.Context, config commonIL.InterLinkConfig, podUID string, podNamespace string, container v1.Container) ([]string, []string, []string, error) {

@@ -5,6 +5,7 @@ type DockerRunStruct struct {
 	Command         string `json:"command"`
 	IsInitContainer bool   `json:"isInitContainer"`
 	GpuArgs         string `json:"gpuArgs"`
+	FpgaArgs        string `json:"fpgaArgs"`
 }
 type CreateStruct struct {
 	PodUID string `json:"PodUID"`
