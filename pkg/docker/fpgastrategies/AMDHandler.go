@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	exec "github.com/alexellis/go-execute/pkg/v1"
@@ -241,8 +242,48 @@ func (a *FPGAManager) Release(containerID string) error {
 }
 
 func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
+	a.FPGASpecsMutex.Lock()
+	defer a.FPGASpecsMutex.Unlock()
 
 	var availableFPGAs []FPGASpecs
+	disableBookkeeping := os.Getenv("FPGA_DISABLE_BOOKKEEPING") == "1"
+
+	if disableBookkeeping {
+		fpgaUsage := make(map[string]int)
+		for _, fpga := range a.FPGASpecsList {
+			if fpga.ContainerID != "" {
+				fpgaUsage[fpga.BDF]++
+			} else {
+				// If an unassigned FPGA is found, prioritize it
+				availableFPGAs = append(availableFPGAs, fpga)
+			}
+		}
+
+		if len(availableFPGAs) >= numFPGAs {
+			return availableFPGAs[:numFPGAs], nil
+		}
+
+		// If not enough unassigned FPGAs, find the least assigned ones
+		sort.Slice(a.FPGASpecsList, func(i, j int) bool {
+			return fpgaUsage[a.FPGASpecsList[i].BDF] < fpgaUsage[a.FPGASpecsList[j].BDF]
+		})
+
+		for _, fpga := range a.FPGASpecsList {
+			if len(availableFPGAs) < numFPGAs {
+				availableFPGAs = append(availableFPGAs, fpga)
+			} else {
+				break
+			}
+		}
+
+		if len(availableFPGAs) >= numFPGAs {
+			return availableFPGAs[:numFPGAs], nil
+		}
+
+		return nil, fmt.Errorf("Not enough FPGAs available. Requested: %d, Found: %d", numFPGAs, len(availableFPGAs))
+	}
+
+	// Default behavior: return only available FPGAs
 	for _, fpgaSpec := range a.FPGASpecsList {
 		if fpgaSpec.Available {
 			availableFPGAs = append(availableFPGAs, fpgaSpec)
@@ -251,6 +292,7 @@ func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
 			}
 		}
 	}
+
 	return nil, fmt.Errorf("Not enough available FPGAs. Requested: %d, Available: %d", numFPGAs, len(availableFPGAs))
 }
 
