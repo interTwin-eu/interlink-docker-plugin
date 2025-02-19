@@ -36,6 +36,7 @@ type RetrievedPodData struct {
 	Pod            v1.Pod               `json:"pod"`
 	Containers     []RetrievedContainer `json:"container"`
 	InitContainers []RetrievedContainer `json:"initContainer"`
+	JobScript      string               `json:"jobScript"`
 }
 
 // InterLinkConfig holds the whole configuration

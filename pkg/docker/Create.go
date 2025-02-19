@@ -283,6 +283,8 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.G(h.Ctx).Info("\u2705 [POD FLOW] Body request for pod creation read successfully", string(bodyBytes))
+
 	var req []commonIL.RetrievedPodData
 	err = json.Unmarshal(bodyBytes, &req)
 
