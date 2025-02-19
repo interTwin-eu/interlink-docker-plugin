@@ -2,7 +2,6 @@ package docker
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -26,7 +25,7 @@ import (
 	trace "go.opentelemetry.io/otel/trace"
 )
 
-func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w http.ResponseWriter) ([]DockerRunStruct, error) {
+func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w http.ResponseWriter, podIp string) ([]DockerRunStruct, error) {
 
 	var dockerRunStructs []DockerRunStruct
 	var fpgaArgs string = ""
@@ -115,10 +114,23 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 
 			for _, envVar := range container.Env {
 				if envVar.Value != "" {
-					if strings.Contains(envVar.Value, "[") {
-						envVars += " -e " + envVar.Name + "='" + envVar.Value + "'"
+					value := envVar.Value
+
+					// If the value starts with a double quote followed by a bracket,
+					// remove the outer double quotes before wrapping.
+					if strings.HasPrefix(value, "\"[") && strings.HasSuffix(value, "]\"") {
+						// Remove the first and last character.
+						value = value[1 : len(value)-1]
+					}
+
+					// Now, if the value looks like a list (starts with '['), wrap it with single quotes.
+					if strings.HasPrefix(value, "[") {
+						envVars += " -e " + envVar.Name + "='" + value + "'"
+					} else if strings.Contains(value, " ") {
+						// For values containing spaces, wrap in double quotes.
+						envVars += " -e " + envVar.Name + "=\"" + value + "\""
 					} else {
-						envVars += " -e " + envVar.Name + "=" + envVar.Value
+						envVars += " -e " + envVar.Name + "=" + value
 					}
 				} else {
 					envVars += " -e " + envVar.Name
@@ -143,8 +155,8 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 				}
 			}
 
-			envVars += " --network=host"
-			cmd := []string{"run", "-d", "--name", containerName}
+			//envVars += " --network=host"
+			cmd := []string{"run", "--user", "root", "-d", "--name", containerName}
 
 			cmd = append(cmd, envVars)
 
@@ -156,7 +168,21 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 				cmd = append(cmd, fpgaArgs)
 			}
 
-			fmt.Printf("Container fpga args: %s\n", fpgaArgs)
+			cmd = append(cmd, "-p", "8888:8888")
+
+			// if podIp != "" {
+			// 	// add --ip flag to the docker run command
+			// 	cmd = append(cmd, "--ip", podIp)
+
+			// 	// add --net vk0
+			// 	cmd = append(cmd, "--net", "vk0")
+
+			// 	// --dns 10.96.0.10
+			// 	cmd = append(cmd, "--dns", "10.96.0.10")
+
+			// 	// add NET_ADMIN  capability
+			// 	cmd = append(cmd, "--cap-add", "NET_ADMIN")
+			// }
 
 			var additionalPortArgs []string
 
@@ -308,6 +334,67 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 
 		podDirectoryPath := filepath.Join(wd, h.Config.DataRootFolder+"/"+podNamespace+"-"+podUID)
 
+		podIpAddress := ""
+		annotations := make([]string, 0, len(data.Pod.Annotations))
+		for key, value := range data.Pod.Annotations {
+			annotations = append(annotations, key+"="+value)
+
+			// if the key is interlink.eu/pod-ip and the value is not empty, set the pod IP to the DIND container
+			if key == "interlink.eu/pod-ip" && value != "" {
+				podIpAddress = value
+			}
+		}
+		log.G(h.Ctx).Info("\u2705 [POD FLOW] Pod Annotations are: " + strings.Join(annotations, ", "))
+
+		log.G(h.Ctx).Info("\u2705 [POD FLOW] Pod IP Address is: " + podIpAddress)
+
+		// if podIpAddress is != "" then exec the command docker network connect vk0 --ip podIpAddress <container_name>
+		if podIpAddress != "" {
+			shell := exec.ExecTask{
+				Command: "docker",
+				Args:    []string{"network", "connect", "vk0", "--ip", podIpAddress, dindContainerID},
+				Shell:   true,
+			}
+
+			_, err = shell.Execute()
+			if err != nil {
+				HandleErrorAndRemoveData(h, w, "An error occurred during the connection of the DIND container to the vk0 network", err, "", "")
+				return
+			}
+
+			// inside the dind container, add the route to the pod IP ip route add 10.0.0.0/8  via 10.244.12.251
+			shell = exec.ExecTask{
+				Command: "docker",
+				Args:    []string{"exec", dindContainerID, "ip", "route", "add", "10.0.0.0/8", "via", "10.244.12.251"},
+				Shell:   true,
+			}
+
+			_, err = shell.Execute()
+			if err != nil {
+				HandleErrorAndRemoveData(h, w, "An error occurred during the addition of the route to the pod IP", err, "", "")
+				return
+			}
+
+			// exec the command echo "nameserver 10.96.0.10" > /etc/resolv.conf
+			// shell = exec.ExecTask{
+			// 	Command: "docker",
+			// 	Args:    []string{"exec", dindContainerID, "-u", "0", "sh", "-c", "echo 'nameserver 10.96.0.10' > /etc/resolv.conf"},
+			// 	Shell:   true,
+			// }
+
+			// log.G(h.Ctx).Info("\u2705 [POD FLOW] Executing command to add nameserver to resolv.conf file")
+			// log.G(h.Ctx).Info("\u2705 [POD FLOW] Command: " + "docker " + strings.Join(shell.Args, " "))
+
+			// _, err = shell.Execute()
+			// if err != nil {
+			// 	HandleErrorAndRemoveData(h, w, "An error occurred during the addition of the nameserver to the resolv.conf file", err, "", "")
+			// 	return
+			// }
+
+			// log.G(h.Ctx).Info("\u2705 [POD FLOW] Nameserver added to resolv.conf file")
+
+		}
+
 		// if the podDirectoryPath does not exist, create it
 		if _, err := os.Stat(podDirectoryPath); os.IsNotExist(err) {
 			err = os.MkdirAll(podDirectoryPath, os.ModePerm)
@@ -318,7 +405,7 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// call prepareDockerRuns to get the DockerRunStruct array
-		dockerRunStructs, err := h.prepareDockerRuns(data, w)
+		dockerRunStructs, err := h.prepareDockerRuns(data, w, podIpAddress)
 		if err != nil {
 			HandleErrorAndRemoveData(h, w, "An error occurred during preparing of docker run commmands", err, "", "")
 			return
@@ -447,6 +534,12 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 
 			// create a file called containers_command.sh and write the containers commands to it, use WriteFile function
 			containersCommand := "#!/bin/sh\n"
+
+			// if podIpAddress is != "" , add the echo "nameserver 10.0 " > /etc/resolv.conf command to the containers_command.sh
+			if podIpAddress != "" {
+				containersCommand += "echo 'nameserver 10.96.0.10' > /etc/resolv.conf" + "\n"
+			}
+
 			for _, container := range containers {
 				containersCommand += container.Command + "\n"
 			}

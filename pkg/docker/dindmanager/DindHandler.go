@@ -147,6 +147,10 @@ func (a *DindManager) BuildDindContainers(nDindContainer int8) error {
 
 		// add the network to the dind container
 		dindContainerArgs = append(dindContainerArgs, "--network", randUID+"_dind_network")
+
+		// append also --net vk0
+		//dindContainerArgs = append(dindContainerArgs, "--net", "vk0")
+		dindContainerArgs = append(dindContainerArgs, "--cap-add", "NET_ADMIN")
 		// "--runtime=nvidia" is added to the dind container if the GPUENABLED env variable is set to 1
 
 		if gpuEnabled == "1" {
@@ -161,8 +165,13 @@ func (a *DindManager) BuildDindContainers(nDindContainer int8) error {
 			Shell:   true,
 		}
 
+		// log the command to be executed with docker and the args
+		log.G(a.Ctx).Info(fmt.Sprintf("\u2705 Command is %s", shell.Command+" "+strings.Join(shell.Args, " ")))
+
 		execReturn, err := shell.Execute()
 		if err != nil {
+			log.G(a.Ctx).Error(fmt.Sprintf("\u274c Error creating DIND container %s", randUID+"_dind"))
+			log.G(a.Ctx).Error(fmt.Sprintf("\u274c %s", execReturn.Stderr))
 			return err
 		}
 		dindContainerID = execReturn.Stdout
@@ -196,6 +205,77 @@ func (a *DindManager) BuildDindContainers(nDindContainer int8) error {
 		}
 
 		log.G(a.Ctx).Info(fmt.Sprintf("\u2705 DIND container %s is up and running", dindContainerID))
+
+		shell = exec.ExecTask{
+			Command: "docker",
+			Args:    []string{"exec", randUID + "_dind", "apt-get", "update"},
+			Shell:   true,
+		}
+		_, err = shell.Execute()
+		if err != nil {
+			return err
+		}
+
+		log.G(a.Ctx).Info(fmt.Sprintf("\u2705 Executed apt-get update"))
+
+		shell = exec.ExecTask{
+			Command: "docker",
+			Args:    []string{"exec", randUID + "_dind", "apt-get", "install", "-y", "net-tools"},
+			Shell:   true,
+		}
+		_, err = shell.Execute()
+		if err != nil {
+			return err
+		}
+
+		log.G(a.Ctx).Info(fmt.Sprintf("\u2705 Installed net-tools"))
+
+		shell = exec.ExecTask{
+			Command: "docker",
+			Args:    []string{"exec", randUID + "_dind", "apt-get", "install", "-y", "iproute2"},
+			Shell:   true,
+		}
+		_, err = shell.Execute()
+		if err != nil {
+			return err
+		}
+
+		// log.G(a.Ctx).Info(fmt.Sprintf("\u2705 Installed iproute2"))
+
+		// // run docker network connet vk0 container-id
+		// shell = exec.ExecTask{
+		// 	Command: "docker",
+		// 	Args:    []string{"network", "connect", "vk0", randUID + "_dind"},
+		// 	Shell:   true,
+		// }
+		// _, err = shell.Execute()
+		// if err != nil {
+		// 	return err
+		// }
+
+		// shell = exec.ExecTask{
+		// 	Command: "docker",
+		// 	Args:    []string{"exec", randUID + "_dind", "docker", "network", "create", "--subnet", "10.244.12.0/24", "-o", "com.docker.network.bridge.name=vk0", "vk0", "-o", "com.docker.network.driver.mtu=1500"},
+		// 	Shell:   true,
+		// }
+		// _, err = shell.Execute()
+		// if err != nil {
+		// 	return err
+		// }
+
+		// log.G(a.Ctx).Info(fmt.Sprintf("\u2705 Created network vk0"))
+
+		// shell = exec.ExecTask{
+		// 	Command: "docker",
+		// 	Args:    []string{"exec", randUID + "_dind", "ip", "link", "set", "to-cluster", "master", "vk0"},
+		// 	Shell:   true,
+		// }
+		// _, err = shell.Execute()
+		// if err != nil {
+		// 	return err
+		// }
+
+		// log.G(a.Ctx).Info(fmt.Sprintf("\u2705 Set vk0 as master"))
 
 		// add the dind container to the list of DIND containers
 		a.DindList = append(a.DindList, DindSpecs{DindID: randUID + "_dind", PodUID: "", DindNetworkID: randUID + "_dind_network", Available: true})
