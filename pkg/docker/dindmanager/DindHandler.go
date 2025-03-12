@@ -145,6 +145,12 @@ func (a *DindManager) BuildDindContainers(nDindContainer int8) error {
 			dindContainerArgs = append(dindContainerArgs, "-v", "/cvmfs:/cvmfs")
 		}
 
+		if os.Getenv("FPGAENABLED") == "1" {
+			if _, err := os.Stat("/tools/Xilinx/"); err == nil {
+				dindContainerArgs = append(dindContainerArgs, "-v", "/tools/Xilinx/:/tools/Xilinx/:ro")
+			}
+		}
+
 		// add the network to the dind container
 		dindContainerArgs = append(dindContainerArgs, "--network", randUID+"_dind_network")
 

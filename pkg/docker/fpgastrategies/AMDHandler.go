@@ -157,7 +157,7 @@ func (a *FPGAManager) Discover() error {
 					}
 
 					for _, fpgaSpec := range a.FPGASpecsList {
-						if fpgaSpec.LogicUUID == fpgas[1] {
+						if fpgaSpec.LogicUUID == logicUUID {
 							found = true
 							break
 						}
@@ -208,6 +208,14 @@ func (a *FPGAManager) Assign(UUID string, containerID string) error {
 	for i := range a.FPGASpecsList {
 		if a.FPGASpecsList[i].LogicUUID == UUID {
 
+			// check if the BOOKKEEPING is disabled
+			disableBookkeeping := os.Getenv("FPGA_DISABLE_BOOKKEEPING") == "1"
+			if disableBookkeeping {
+				a.FPGASpecsList[i].ContainerID = containerID
+				a.FPGASpecsList[i].Available = false
+				break
+			}
+
 			if !a.FPGASpecsList[i].Available {
 				return fmt.Errorf("FPGA with UUID %s is already in use by container %s", UUID, a.FPGASpecsList[i].ContainerID)
 			}
@@ -241,7 +249,7 @@ func (a *FPGAManager) Release(containerID string) error {
 	return nil
 }
 
-func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
+/* func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
 	a.FPGASpecsMutex.Lock()
 	defer a.FPGASpecsMutex.Unlock()
 
@@ -293,6 +301,66 @@ func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
 		}
 	}
 
+	return nil, fmt.Errorf("Not enough available FPGAs. Requested: %d, Available: %d", numFPGAs, len(availableFPGAs))
+} */
+
+func (a *FPGAManager) GetAvailableFPGAs(numFPGAs int) ([]FPGASpecs, error) {
+
+	var availableFPGAs []FPGASpecs
+
+	fmt.Println("Checking for available FPGAs")
+
+	disableBookkeeping := os.Getenv("FPGA_DISABLE_BOOKKEEPING") == "1"
+
+	fmt.Println(fmt.Sprintf("FPGA_DISABLE_BOOKKEEPING: %v", disableBookkeeping))
+
+	if disableBookkeeping {
+		fmt.Println("FPGA_DISABLE_BOOKKEEPING is set to 1. Disabling bookkeeping")
+
+		fpgaUsage := make(map[string]int)
+		for _, fpga := range a.FPGASpecsList {
+			if fpga.ContainerID != "" {
+				fpgaUsage[fpga.BDF]++
+			} else {
+				// If an unassigned FPGA is found, prioritize it
+				availableFPGAs = append(availableFPGAs, fpga)
+			}
+		}
+
+		fmt.Println(fmt.Sprintf("FPGA Usage: %v", fpgaUsage))
+
+		if len(availableFPGAs) >= numFPGAs {
+			return availableFPGAs[:numFPGAs], nil
+		}
+
+		// If not enough unassigned FPGAs, find the least assigned ones
+		sort.Slice(a.FPGASpecsList, func(i, j int) bool {
+			return fpgaUsage[a.FPGASpecsList[i].BDF] < fpgaUsage[a.FPGASpecsList[j].BDF]
+		})
+
+		for _, fpga := range a.FPGASpecsList {
+			if len(availableFPGAs) < numFPGAs {
+				availableFPGAs = append(availableFPGAs, fpga)
+			} else {
+				break
+			}
+		}
+
+		if len(availableFPGAs) >= numFPGAs {
+			return availableFPGAs[:numFPGAs], nil
+		}
+
+		return nil, fmt.Errorf("Not enough FPGAs available. Requested: %d, Found: %d", numFPGAs, len(availableFPGAs))
+	}
+
+	for _, fpgaSpec := range a.FPGASpecsList {
+		if fpgaSpec.Available {
+			availableFPGAs = append(availableFPGAs, fpgaSpec)
+			if len(availableFPGAs) == numFPGAs {
+				return availableFPGAs, nil
+			}
+		}
+	}
 	return nil, fmt.Errorf("Not enough available FPGAs. Requested: %d, Available: %d", numFPGAs, len(availableFPGAs))
 }
 

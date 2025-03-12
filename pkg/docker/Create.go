@@ -97,14 +97,28 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 
 					numFPGAsRequestedInt := int(numFPGAsRequested)
 					_, err := h.FPGAManager.GetAvailableFPGAs(numFPGAsRequestedInt)
+					log.G(h.Ctx).Info("\u2705 [CREATE CALL] Retrieved available FPGAs")
 					if err != nil {
+						// log the err
+						log.G(h.Ctx).Error("\u274C [CREATE CALL] Error retrieving available FPGAs")
 						HandleErrorAndRemoveData(h, w, "An error occurred during the request of available FPGAs", err, podNamespace, podUID)
 						return dockerRunStructs, errors.New("An error occurred during the request of available FPGAs")
 					}
+
+					log.G(h.Ctx).Info("\u2705 [CREATE CALL] ********* BEFORE Requested FPGAs are available")
+
 					assignedFPGAs, err := h.FPGAManager.GetAndAssignAvailableFPGAs(numFPGAsRequestedInt, containerName)
+					log.G(h.Ctx).Info("\u2705 [CREATE CALL] ********* AFTER Requested FPGAs are available")
+
+					// log the assigned FPGAs
+					log.G(h.Ctx).Info("\u2705 [CREATE CALL] Assigned FPGAs: ")
+					for _, fpgaSpec := range assignedFPGAs {
+						log.G(h.Ctx).Info("\u2705 [CREATE CALL] " + fpgaSpec.DeviceToMount)
+					}
 					if err != nil {
-						HandleErrorAndRemoveData(h, w, "An error occurred during request of get and assign of an available GPU", err, podNamespace, podUID)
-						return dockerRunStructs, errors.New("An error occurred during request of get and assign of an available GPU")
+						log.G(h.Ctx).Error("\u274C [CREATE CALL] Error during request of get and assign of an available FPGA")
+						HandleErrorAndRemoveData(h, w, "An error occurred during request of get and assign of an available FPGA", err, podNamespace, podUID)
+						return dockerRunStructs, errors.New("An error occurred during request of get and assign of an available FPGA")
 					}
 					for _, fpgaSpec := range assignedFPGAs {
 						fpgaArgs += " --device=" + fpgaSpec.DeviceToMount + ":" + fpgaSpec.DeviceToMount
@@ -154,6 +168,13 @@ func (h *SidecarHandler) prepareDockerRuns(podData commonIL.RetrievedPodData, w 
 					}
 				}
 			}
+
+			// if FPGA is requested, mount in read mode the /tools/Xilinx/ path in the container
+			if isFPGARequested {
+				envVars += " -v /tools/Xilinx/:/tools/Xilinx/:ro"
+			}
+
+			log.G(h.Ctx).Info("\u2705 [POD FLOW] Before creating run command")
 
 			//envVars += " --network=host"
 			cmd := []string{"run", "--user", "root", "-d", "--name", containerName}
@@ -309,8 +330,6 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.G(h.Ctx).Info("\u2705 [POD FLOW] Body request for pod creation read successfully", string(bodyBytes))
-
 	var req []commonIL.RetrievedPodData
 	err = json.Unmarshal(bodyBytes, &req)
 
@@ -362,10 +381,16 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			routeIP := strings.Split(podIpAddress, ".")
+			routeIP[3] = "251"
+			route := strings.Join(routeIP, ".")
+
+			log.G(h.Ctx).Info("\u2705 [POD FLOW] Route IP is: " + route)
+
 			// inside the dind container, add the route to the pod IP ip route add 10.0.0.0/8  via 10.244.12.251
 			shell = exec.ExecTask{
 				Command: "docker",
-				Args:    []string{"exec", dindContainerID, "ip", "route", "add", "10.0.0.0/8", "via", "10.244.12.251"},
+				Args:    []string{"exec", dindContainerID, "ip", "route", "add", "10.0.0.0/8", "via", route},
 				Shell:   true,
 			}
 
@@ -374,24 +399,6 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 				HandleErrorAndRemoveData(h, w, "An error occurred during the addition of the route to the pod IP", err, "", "")
 				return
 			}
-
-			// exec the command echo "nameserver 10.96.0.10" > /etc/resolv.conf
-			// shell = exec.ExecTask{
-			// 	Command: "docker",
-			// 	Args:    []string{"exec", dindContainerID, "-u", "0", "sh", "-c", "echo 'nameserver 10.96.0.10' > /etc/resolv.conf"},
-			// 	Shell:   true,
-			// }
-
-			// log.G(h.Ctx).Info("\u2705 [POD FLOW] Executing command to add nameserver to resolv.conf file")
-			// log.G(h.Ctx).Info("\u2705 [POD FLOW] Command: " + "docker " + strings.Join(shell.Args, " "))
-
-			// _, err = shell.Execute()
-			// if err != nil {
-			// 	HandleErrorAndRemoveData(h, w, "An error occurred during the addition of the nameserver to the resolv.conf file", err, "", "")
-			// 	return
-			// }
-
-			// log.G(h.Ctx).Info("\u2705 [POD FLOW] Nameserver added to resolv.conf file")
 
 		}
 
@@ -531,6 +538,8 @@ func (h *SidecarHandler) CreateHandler(w http.ResponseWriter, r *http.Request) {
 
 				log.G(h.Ctx).Info("\u2705 [POD FLOW] All init containers created and executed successfully")
 			}
+
+			log.G(h.Ctx).Info("\u2705 [POD FLOW] Start creating containers")
 
 			// create a file called containers_command.sh and write the containers commands to it, use WriteFile function
 			containersCommand := "#!/bin/sh\n"
